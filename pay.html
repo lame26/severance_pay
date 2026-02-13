@@ -205,6 +205,14 @@
         .btn-remove:hover { background: #d32f2f; }
         .promo-result { font-size: 0.8rem; color: #666; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; }
 
+        /* ===== 읽기 전용 필드 스타일 ===== */
+        input[readonly] {
+            background-color: #e3f2fd;
+            cursor: not-allowed;
+            color: #003DA5;
+            font-weight: 600;
+        }
+
         @media (max-width: 768px) {
             .main-content { flex-direction: column; }
             .month-inputs { grid-template-columns: 1fr; }
@@ -256,8 +264,9 @@
             <div class="form-group">
                 <label>현재 예상 퇴직금 (DC 전환 시 이전액)</label>
                 <div class="input-wrapper" data-unit="원">
-                    <input type="text" id="curr-db-transfer" value="64,724,880">
+                    <input type="text" id="curr-db-transfer" readonly value="">
                 </div>
+                <div class="info-text">※ 급여 정보와 근속연수로부터 자동 계산됩니다</div>
             </div>
 
             <div class="form-group">
@@ -361,6 +370,21 @@
     let myChart = null;
     let promoCount = 0;
 
+    // --- 현재 퇴직금 자동 계산 ---
+    function calculateCurrentPension() {
+        const m1 = parseNum('wage-m1');
+        const m2 = parseNum('wage-m2');
+        const m3 = parseNum('wage-m3');
+        const incentive = parseNum('wage-incentive');
+        const currYears = parseNum('curr-years');
+
+        const monthlyFixed = (m1 + m2 + m3) / 3;
+        const avgWage = monthlyFixed + (incentive / 12);
+        const currentPension = avgWage * currYears;
+
+        document.getElementById('curr-db-transfer').value = fmtNum(currentPension);
+    }
+
     // --- 승급 가산액 계산 함수들 ---
     const promoFormulas = {
         4: (baseSalary) => {  // 5급→4급
@@ -393,7 +417,7 @@
 
         const html = `
             <div class="promo-card" id="card-${promoId}">
-                <h4>승급 #${promoCount}</h4>
+                <h4>5급 → 4급 (승급 #${promoCount})</h4>
                 <div class="promo-row">
                     <div>
                         <label style="font-size:0.8rem;">승급 년도</label>
@@ -402,7 +426,7 @@
                         </div>
                     </div>
                     <div>
-                        <label style="font-size:0.8rem;">승급 전 기본급 (연액)</label>
+                        <label style="font-size:0.8rem;">현재 기본급 (연액)</label>
                         <div class="input-wrapper" data-unit="원">
                             <input type="text" id="salary-${promoId}" class="promo-salary" placeholder="예: 40,000,000">
                         </div>
@@ -410,7 +434,7 @@
                     <button class="btn-remove" onclick="removePromotion('${promoId}')" title="제거">✕</button>
                 </div>
                 <div class="promo-result" id="result-${promoId}">
-                    기본급을 입력하고 엔터를 누르면 가산액이 계산됩니다.
+                    현재 기본급을 입력하면 자동으로 계산됩니다.
                 </div>
             </div>
         `;
@@ -423,6 +447,7 @@
         });
 
         document.getElementById(`salary-${promoId}`).addEventListener('change', () => calcPromoBonus(promoId));
+        document.getElementById(`year-${promoId}`).addEventListener('change', () => calcPromoBonus(promoId));
     }
 
     function removePromotion(promoId) {
@@ -430,22 +455,44 @@
         if (card) card.remove();
     }
 
+    // --- 승급 시점의 예상 기본급 자동 계산 ---
+    function calculatePromoSalaryAtPromotionYear(promoId) {
+        const currentBaseSalary = parseNum(`salary-${promoId}`);
+        const promYear = parseInt(document.getElementById(`year-${promoId}`).value);
+        const currentYear = parseInt(document.getElementById('current-year').value);
+        const rateWage = parseNum('rate-wage') / 100;
+
+        if (currentBaseSalary === 0) return;
+
+        // 승급 시점의 기본급 = 현재 기본급 × (1 + 임금인상률)^(승급년도 - 현재년도)
+        const yearsToPromotion = promYear - currentYear;
+        const salaryAtPromotion = currentBaseSalary * Math.pow(1 + rateWage, yearsToPromotion);
+
+        return salaryAtPromotion;
+    }
+
     function calcPromoBonus(promoId) {
-        const baseSalary = parseNum(`salary-${promoId}`);
+        const currentBaseSalary = parseNum(`salary-${promoId}`);
         const year = parseInt(document.getElementById(`year-${promoId}`).value);
         const currentYear = parseInt(document.getElementById('current-year').value);
 
-        if (baseSalary === 0) return;
+        if (currentBaseSalary === 0) return;
+
+        // 승급 시점의 기본급 자동 계산
+        const salaryAtPromotion = calculatePromoSalaryAtPromotionYear(promoId);
 
         // 현재 급수 5급 → 다음 급수 4급 (항상)
         const fromGrade = 5;
         const toGrade = 4;
-        const bonus = promoFormulas[toGrade](baseSalary);
+        const bonus = promoFormulas[toGrade](salaryAtPromotion);
         const yearsAfter = year - currentYear;
+        const rateWage = parseNum('rate-wage') / 100;
 
         const resultText = `
             <strong>${gradeNames[fromGrade]} → ${gradeNames[toGrade]} 승급</strong> (${year}년, ${yearsAfter}년 후)<br>
-            기본급 ${fmtNum(baseSalary)}원 기준<br>
+            현재 기본급 ${fmtNum(currentBaseSalary)}원<br>
+            ${rateWage > 0 ? `연 ${Math.round(rateWage*100)}% 인상 적용 → ` : ''}
+            승급 시점 기본급 ${fmtNum(salaryAtPromotion)}원<br>
             <strong style="color: var(--knoc-red);">월 가산액: ${fmtNum(bonus / 12)}원 (연 ${fmtNum(bonus)}원)</strong>
         `;
         document.getElementById(`result-${promoId}`).innerHTML = resultText;
@@ -460,14 +507,17 @@
         promoCards.forEach(card => {
             const id = card.id.replace('card-', '');
             const year = parseInt(document.getElementById(`year-${id}`).value);
-            const baseSalary = parseNum(`salary-${id}`);
+            const currentBaseSalary = parseNum(`salary-${id}`);
 
-            if (baseSalary > 0) {
+            if (currentBaseSalary > 0) {
+                // 승급 시점의 기본급 자동 계산
+                const salaryAtPromotion = calculatePromoSalaryAtPromotionYear(id);
+
                 promos.push({
                     year: year,
                     yearsAfter: year - currentYear,
-                    baseSalary: baseSalary,
-                    bonus: promoFormulas[4](baseSalary) / 12  // 월 가산액
+                    baseSalary: salaryAtPromotion,  // 승급 시점의 기본급 사용
+                    bonus: promoFormulas[4](salaryAtPromotion) / 12  // 월 가산액
                 });
             }
         });
@@ -580,9 +630,29 @@
         drawChart(dataYears, dataDB, dataSim, isHybrid);
     }
 
-    // 페이지 로드 시 초기 승급 추가
+    // 페이지 로드 시 초기화
     window.addEventListener('DOMContentLoaded', () => {
+        calculateCurrentPension();
         addPromotion();
+
+        // 현재 퇴직금 자동 계산 이벤트 리스너
+        ['wage-m1', 'wage-m2', 'wage-m3', 'wage-incentive', 'curr-years'].forEach(id => {
+            document.getElementById(id).addEventListener('change', calculateCurrentPension);
+            document.getElementById(id).addEventListener('blur', calculateCurrentPension);
+        });
+
+        // 년도/임금인상률 변경 시 모든 승급 카드 재계산
+        const updateAllPromotions = () => {
+            document.querySelectorAll('.promo-salary').forEach(input => {
+                if (input.value) {
+                    const promoId = input.id.replace('salary-', '');
+                    calcPromoBonus(promoId);
+                }
+            });
+        };
+
+        document.getElementById('current-year').addEventListener('change', updateAllPromotions);
+        document.getElementById('rate-wage').addEventListener('change', updateAllPromotions);
     });
 
     function drawChart(labels, dbData, simData, isHybrid) {
