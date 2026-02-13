@@ -204,6 +204,19 @@
         .btn-remove { background: #f44336; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-size: 1rem; }
         .btn-remove:hover { background: #d32f2f; }
         .promo-result { font-size: 0.8rem; color: #666; margin-top: 8px; padding: 8px; background: white; border-radius: 4px; }
+        .promo-result { white-space: pre-line; }
+
+        .error-box {
+            display: none;
+            background: #ffebee;
+            border-left: 4px solid #d32f2f;
+            color: #b71c1c;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
 
         @media (max-width: 768px) {
             .main-content { flex-direction: column; }
@@ -309,6 +322,8 @@
                     <i class="fas fa-plus"></i> 승급 추가
                 </button>
             </div>
+
+            <div class="error-box" id="input-error-box"></div>
 
             <button class="btn-calc" onclick="calculate()">시뮬레이션 실행</button>
         </div>
@@ -422,37 +437,19 @@
             if (!isNaN(val)) e.target.value = Number(val).toLocaleString();
         });
 
-        document.getElementById(`salary-${promoId}`).addEventListener('change', () => calcPromoBonus(promoId));
+        document.getElementById(`salary-${promoId}`).addEventListener('change', () => recalculatePromotionPreviews());
+        document.getElementById(`year-${promoId}`).addEventListener('change', () => recalculatePromotionPreviews());
+        recalculatePromotionPreviews();
     }
 
     function removePromotion(promoId) {
         const card = document.getElementById(`card-${promoId}`);
         if (card) card.remove();
-    }
-
-    function calcPromoBonus(promoId) {
-        const baseSalary = parseNum(`salary-${promoId}`);
-        const year = parseInt(document.getElementById(`year-${promoId}`).value);
-        const currentYear = parseInt(document.getElementById('current-year').value);
-
-        if (baseSalary === 0) return;
-
-        // 현재 급수 5급 → 다음 급수 4급 (항상)
-        const fromGrade = 5;
-        const toGrade = 4;
-        const bonus = promoFormulas[toGrade](baseSalary);
-        const yearsAfter = year - currentYear;
-
-        const resultText = `
-            <strong>${gradeNames[fromGrade]} → ${gradeNames[toGrade]} 승급</strong> (${year}년, ${yearsAfter}년 후)<br>
-            기본급 ${fmtNum(baseSalary)}원 기준<br>
-            <strong style="color: var(--knoc-red);">월 가산액: ${fmtNum(bonus / 12)}원 (연 ${fmtNum(bonus)}원)</strong>
-        `;
-        document.getElementById(`result-${promoId}`).innerHTML = resultText;
+        recalculatePromotionPreviews();
     }
 
     function getPromotions() {
-        // 모든 승급 정보 수집
+        // 모든 승급 정보를 수집하고, 승급 년도 기준으로 순차 승급(5→4→3→2→1)을 가정
         const promos = [];
         const promoCards = document.querySelectorAll('[id^="card-promo-"]');
         const currentYear = parseInt(document.getElementById('current-year').value);
@@ -464,20 +461,103 @@
 
             if (baseSalary > 0) {
                 promos.push({
+                    id: id,
                     year: year,
                     yearsAfter: year - currentYear,
-                    baseSalary: baseSalary,
-                    bonus: promoFormulas[4](baseSalary) / 12  // 월 가산액
+                    baseSalary: baseSalary
                 });
             }
         });
 
         // 년도 기준으로 정렬
         promos.sort((a, b) => a.yearsAfter - b.yearsAfter);
+
+        let currentGrade = 5;
+        promos.forEach((promo) => {
+            const fromGrade = currentGrade;
+            const toGrade = Math.max(1, currentGrade - 1);
+            const annualBonus = promoFormulas[toGrade] ? promoFormulas[toGrade](promo.baseSalary) : 0;
+
+            promo.fromGrade = fromGrade;
+            promo.toGrade = toGrade;
+            promo.annualBonus = annualBonus;
+            promo.bonus = annualBonus / 12;
+
+            currentGrade = toGrade;
+        });
+
         return promos;
     }
 
+    function recalculatePromotionPreviews() {
+        const promotions = getPromotions();
+        const currentYear = parseInt(document.getElementById('current-year').value);
+        const promoCards = document.querySelectorAll('[id^="card-promo-"]');
+
+        promoCards.forEach(card => {
+            const id = card.id.replace('card-', '');
+            const resultElem = document.getElementById(`result-${id}`);
+            const match = promotions.find(p => p.id === id);
+
+            if (!match) {
+                resultElem.textContent = '기본급을 입력하고 엔터를 누르면 가산액이 계산됩니다.';
+                return;
+            }
+
+            const yearsAfter = match.year - currentYear;
+            resultElem.textContent = `${gradeNames[match.fromGrade]} → ${gradeNames[match.toGrade]} 승급 (${match.year}년, ${yearsAfter}년 후)\n기본급 ${fmtNum(match.baseSalary)}원 기준\n월 가산액: ${fmtNum(match.bonus)}원 (연 ${fmtNum(match.annualBonus)}원)`;
+        });
+    }
+
+    function validateInputs() {
+        const errors = [];
+        const values = [
+            { id: 'wage-m1', label: '직전 3개월 급여(1개월차)' },
+            { id: 'wage-m2', label: '직전 3개월 급여(2개월차)' },
+            { id: 'wage-m3', label: '직전 3개월 급여(3개월차)' },
+            { id: 'wage-incentive', label: '직전 1년 성과급' },
+            { id: 'curr-years', label: '현재 근속연수' },
+            { id: 'fut-years', label: '향후 근무기간' },
+            { id: 'curr-db-transfer', label: '현재 예상 퇴직금' }
+        ];
+
+        values.forEach(({ id, label }) => {
+            if (parseNum(id) < 0) errors.push(`${label}은(는) 0 이상이어야 합니다.`);
+        });
+
+        const futYears = parseNum('fut-years');
+        if (futYears <= 0) errors.push('향후 근무기간은 0년보다 커야 합니다.');
+
+        ['rate-wage', 'rate-dc', 'rate-msb'].forEach((id) => {
+            const val = parseNum(id);
+            if (val < -100 || val > 100) errors.push(`${id} 값은 -100% ~ 100% 범위로 입력해 주세요.`);
+        });
+
+        const currentYear = parseInt(document.getElementById('current-year').value);
+        if (!Number.isFinite(currentYear) || currentYear < 1900) {
+            errors.push('현재 년도를 올바르게 입력해 주세요.');
+        }
+
+        const promotions = getPromotions();
+        promotions.forEach((promo) => {
+            if (promo.year < currentYear) errors.push(`승급 년도(${promo.year})는 현재 년도(${currentYear}) 이상이어야 합니다.`);
+        });
+
+        const errorBox = document.getElementById('input-error-box');
+        if (errors.length > 0) {
+            errorBox.style.display = 'block';
+            errorBox.textContent = '입력값을 확인해 주세요.\n- ' + errors.join('\n- ');
+            return false;
+        }
+
+        errorBox.style.display = 'none';
+        errorBox.textContent = '';
+        return true;
+    }
+
     function calculate() {
+        if (!validateInputs()) return;
+
         const m1 = parseNum('wage-m1');
         const m2 = parseNum('wage-m2');
         const m3 = parseNum('wage-m3');
@@ -571,7 +651,7 @@
         const alertBox = document.getElementById('bonus-alert');
         if (totalBonus > 0) {
             alertBox.style.display = 'block';
-            let targetText = isHybrid ? "과거 전환분(11.5년)에 대해" : "전체 기간에 대해";
+            let targetText = isHybrid ? `과거 전환분(${currYears}년)에 대해` : '전체 기간에 대해';
             document.getElementById('bonus-msg').innerText = `${targetText} 승진보상금 약 ${fmtNum(totalBonus)}원이 지급됩니다.`;
         } else {
             alertBox.style.display = 'none';
@@ -583,6 +663,7 @@
     // 페이지 로드 시 초기 승급 추가
     window.addEventListener('DOMContentLoaded', () => {
         addPromotion();
+        document.getElementById('current-year').addEventListener('change', recalculatePromotionPreviews);
     });
 
     function drawChart(labels, dbData, simData, isHybrid) {
